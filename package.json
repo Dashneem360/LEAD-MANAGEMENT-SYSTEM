@@ -5,7 +5,7 @@
   "scripts": {
     "install-all": "npm install && cd server && npm install && cd ../client && npm install",
     "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm run dev\"",
-    "build": "npm --prefix client run build",
+    "build": "npm --prefix server install && npm --prefix client install && npm --prefix client run build",
     "start": "npm --prefix server start",
     "start:dev": "npm run dev"
   },
