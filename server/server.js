@@ -42,6 +42,7 @@ app.use('/api/sheets', require('./routes/sheets'));
 app.use('/api/webinars', require('./routes/webinars'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/messages', require('./routes/messages'));
+app.use('/api/groups', require('./routes/groups'));
 app.use('/api/meetings', require('./routes/meetings'));
 
 // Health check

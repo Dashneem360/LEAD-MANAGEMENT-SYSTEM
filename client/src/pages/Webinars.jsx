@@ -271,24 +271,34 @@ function WebinarModal({ webinar, onClose, onSave }) {
 }
 
 function AttendancePopup({ webinar, onClose, onUpdate }) {
-  const [leads, setLeads] = useState([]);
+  const [attendees, setAttendees] = useState(
+    (webinar.attendees || []).map(a => ({ ...a }))
+  );
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api.get('/leads?limit=500').then(r => setLeads(r.data.leads || [])).finally(() => setLoading(false));
-  }, []);
 
   const markAttendance = async (leadId, status) => {
+    // Optimistic update — turn green instantly
+    setAttendees(prev => prev.map(a => {
+      const id = a.lead?._id || a.lead;
+      return String(id) === String(leadId) ? { ...a, status } : a;
+    }));
     try {
       await api.put(`/webinars/${webinar._id}/mark-attendance`, { leadId, status });
-      toast.success(`Marked as ${status}`);
       onUpdate();
-    } catch { toast.error('Failed'); }
+    } catch {
+      toast.error('Failed to mark attendance');
+      // Revert on failure
+      setAttendees(webinar.attendees || []);
+    }
   };
 
-  const getStatus = (leadId) => webinar.attendees?.find(a => a.lead?._id === leadId || a.lead === leadId)?.status || null;
-  const filtered = leads.filter(l => l.name.toLowerCase().includes(search.toLowerCase()) || l.phone.includes(search));
+  const totalAttended = attendees.filter(a => a.status === 'attended').length;
+
+  const filtered = attendees.filter(a => {
+    const lead = a.lead || {};
+    const q = search.toLowerCase();
+    return !q || lead.name?.toLowerCase().includes(q) || (lead.phone || '').includes(q);
+  });
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -299,13 +309,18 @@ function AttendancePopup({ webinar, onClose, onUpdate }) {
         </div>
         <div className="modal-body">
           <div className="attendance-stats">
-            <span>Attended: <strong>{webinar.totalAttended || 0}</strong></span>
-            <span>Invited: <strong>{webinar.attendees?.length || 0}</strong></span>
+            <span>Attended: <strong>{totalAttended}</strong></span>
+            <span>Invited: <strong>{attendees.length}</strong></span>
           </div>
-          <input className="search-input" placeholder="Search leads..." value={search} onChange={e => setSearch(e.target.value)} />
+          <input className="search-input" placeholder="Search invited leads..." value={search} onChange={e => setSearch(e.target.value)} />
           <div className="attendance-list">
-            {loading ? <div className="loading-spinner"></div> : filtered.map(lead => {
-              const status = getStatus(lead._id);
+            {filtered.length === 0 ? (
+              <div className="empty-state" style={{ padding: 24 }}>
+                {attendees.length === 0 ? 'No leads invited to this webinar.' : 'No matching leads.'}
+              </div>
+            ) : filtered.map(a => {
+              const lead = a.lead || {};
+              const status = a.status;
               return (
                 <div key={lead._id} className={`attendance-row ${status || ''}`}>
                   <div className="att-info">
@@ -454,7 +469,7 @@ export default function Webinars() {
         <AttendancePopup
           webinar={attendanceWebinar}
           onClose={() => setAttendanceWebinar(null)}
-          onUpdate={() => { loadWebinars(); }}
+          onUpdate={() => loadWebinars()}
         />
       )}
       {showWASetup && <WASetupModal onClose={() => { setShowWASetup(false); pollWA(); }} />}

@@ -38,9 +38,11 @@ export default function Header({ onMenuClick }) {
   };
 
   const markRead = async () => {
-    await api.put('/dashboard/notifications/read');
-    setUnread(0);
-    setNotifications(n => n.map(x => ({ ...x, isRead: true })));
+    try {
+      await api.put('/dashboard/notifications/read');
+      setUnread(0);
+      setNotifications(n => n.map(x => ({ ...x, isRead: true })));
+    } catch {}
   };
 
   const notifTypeIcon = (type) => {
@@ -104,12 +106,12 @@ export default function Header({ onMenuClick }) {
           )}
         </div>
 
-        <button className="header-user profile-action" onClick={() => setShowPassword(true)} title="Change Password">
+        <div className="header-user">
           <div className="user-avatar-sm">
             {user?.avatar ? <img src={user.avatar} alt={user.name} /> : <span>{user?.name?.charAt(0).toUpperCase()}</span>}
           </div>
           <span className="header-username">{user?.name}</span>
-        </button>
+        </div>
         <button className="icon-btn" onClick={() => setShowPassword(true)} title="Change Password"><MdLock /></button>
       </div>
       {showPassword && (

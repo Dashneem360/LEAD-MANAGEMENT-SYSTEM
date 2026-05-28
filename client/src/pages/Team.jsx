@@ -141,6 +141,7 @@ export default function Team() {
                     <div className="tc-email"><MdEmail /> {candidate.email}</div>
                     {candidate.phone && <div className="tc-phone"><MdPhone /> {candidate.phone}</div>}
                   </div>
+                  <button className="btn-icon" title="Reset Password" onClick={() => resetPassword(candidate)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#6366f1', fontSize: 20 }}><MdLock /></button>
                 </div>
 
                 <div className="tc-stats">
@@ -175,7 +176,6 @@ export default function Team() {
                 <div className="tc-footer">
                   <span className="tc-email"><MdPeople /> Assign leads from the Leads page</span>
                   <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                    <button className="btn-sm blue" onClick={() => resetPassword(candidate)}><MdLock /> Password</button>
                     <button className="btn-sm red" onClick={() => disableCandidate(candidate)}><MdBlock /> Disable</button>
                   </div>
                 </div>
