@@ -1,0 +1,15 @@
+{
+  "name": "lead-management-system",
+  "version": "1.0.0",
+  "description": "Full Stack MERN Lead Management System",
+  "scripts": {
+    "install-all": "npm install && cd server && npm install && cd ../client && npm install",
+    "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm run dev\"",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "start:dev": "npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

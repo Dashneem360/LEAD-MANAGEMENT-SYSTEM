@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: lead-management-system
+    env: node
+    buildCommand: npm install --prefix server && npm install --prefix client && npm run build --prefix client
+    startCommand: npm start --prefix server
