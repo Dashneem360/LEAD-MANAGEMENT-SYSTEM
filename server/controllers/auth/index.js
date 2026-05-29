@@ -18,7 +18,7 @@ const generateToken = (user) => jwt.sign({
   role: user.role,
   companyCode: user.companyCode,
   candidateId: user.candidateId
-}, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '7d' });
+}, process.env.JWT_SECRET, { expiresIn: '7d' });
 
 const nextCandidateId = () => `CAND-${Date.now().toString(36).toUpperCase()}`;
 
