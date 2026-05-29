@@ -3,8 +3,8 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const Message = require('../models/Message');
-const User = require('../models/User');
+const { Op } = require('sequelize');
+const { Message, User } = require('../models');
 const wa = require('../utils/whatsappClient');
 const { protect } = require('../middleware/auth');
 
@@ -20,24 +20,30 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 
+const USER_ATTRS = ['id', 'name', 'avatar', 'role'];
+const MSG_INCLUDE = [
+  { model: User, as: 'from', attributes: USER_ATTRS },
+  { model: User, as: 'to', attributes: USER_ATTRS }
+];
+
 router.use(protect);
 
-// GET /api/messages?with=userId  — conversation thread or full inbox
+// GET /api/messages?with=userId
 router.get('/', async (req, res) => {
   try {
     const { with: withUser } = req.query;
-    const filter = withUser
-      ? { $or: [{ from: req.user._id, to: withUser }, { from: withUser, to: req.user._id }] }
-      : { $or: [{ from: req.user._id }, { to: req.user._id }] };
+    const where = withUser
+      ? { [Op.or]: [{ fromId: req.user.id, toId: withUser }, { fromId: withUser, toId: req.user.id }] }
+      : { [Op.or]: [{ fromId: req.user.id }, { toId: req.user.id }] };
 
-    const messages = await Message.find(filter)
-      .populate('from', 'name avatar role')
-      .populate('to', 'name avatar role')
-      .sort({ createdAt: 1 })
-      .limit(200);
+    const messages = await Message.findAll({
+      where, include: MSG_INCLUDE,
+      order: [['createdAt', 'ASC']],
+      limit: 200
+    });
 
     if (withUser) {
-      await Message.updateMany({ from: withUser, to: req.user._id, isRead: false }, { isRead: true });
+      await Message.update({ isRead: true }, { where: { fromId: withUser, toId: req.user.id, isRead: false } });
     }
 
     res.json({ success: true, messages });
@@ -49,63 +55,63 @@ router.get('/', async (req, res) => {
 // GET /api/messages/unread-count
 router.get('/unread-count', async (req, res) => {
   try {
-    const count = await Message.countDocuments({ to: req.user._id, isRead: false });
+    const count = await Message.count({ where: { toId: req.user.id, isRead: false } });
     res.json({ success: true, count });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// POST /api/messages/send — text message
+// POST /api/messages/send
 router.post('/send', async (req, res) => {
   try {
     const { toUserId, content } = req.body;
     if (!toUserId || !content?.trim()) return res.status(400).json({ success: false, message: 'Recipient and content required' });
 
-    const toUser = await User.findById(toUserId);
+    const toUser = await User.findByPk(toUserId);
     if (!toUser) return res.status(404).json({ success: false, message: 'User not found' });
 
-    const msg = await Message.create({ from: req.user._id, to: toUserId, type: 'text', content: content.trim() });
+    const msg = await Message.create({ fromId: req.user.id, toId: toUserId, type: 'text', content: content.trim() });
 
     let whatsappSent = false;
     if (wa.isReady() && toUser.phone) {
       try {
         await wa.sendText(toUser.phone, `📩 *Message from ${req.user.name}:*\n\n${content.trim()}`);
         whatsappSent = true;
-        await Message.findByIdAndUpdate(msg._id, { whatsappSent: true });
+        await msg.update({ whatsappSent: true });
       } catch { /* fail silently */ }
     }
 
-    await msg.populate('from to', 'name avatar role');
-    res.status(201).json({ success: true, message: msg, whatsappSent });
+    const populated = await Message.findByPk(msg.id, { include: MSG_INCLUDE });
+    res.status(201).json({ success: true, message: populated, whatsappSent });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// POST /api/messages/send-voice — voice note upload
+// POST /api/messages/send-voice
 router.post('/send-voice', upload.single('audio'), async (req, res) => {
   try {
     const { toUserId } = req.body;
     if (!toUserId || !req.file) return res.status(400).json({ success: false, message: 'Recipient and audio required' });
 
-    const toUser = await User.findById(toUserId);
+    const toUser = await User.findByPk(toUserId);
     if (!toUser) return res.status(404).json({ success: false, message: 'User not found' });
 
     const audioUrl = `/uploads/voice/${req.file.filename}`;
-    const msg = await Message.create({ from: req.user._id, to: toUserId, type: 'voice', audioUrl });
+    const msg = await Message.create({ fromId: req.user.id, toId: toUserId, type: 'voice', audioUrl });
 
     let whatsappSent = false;
     if (wa.isReady() && toUser.phone) {
       try {
         await wa.sendAudio(toUser.phone, req.file.path);
         whatsappSent = true;
-        await Message.findByIdAndUpdate(msg._id, { whatsappSent: true });
+        await msg.update({ whatsappSent: true });
       } catch { /* fail silently */ }
     }
 
-    await msg.populate('from to', 'name avatar role');
-    res.status(201).json({ success: true, message: msg, whatsappSent });
+    const populated = await Message.findByPk(msg.id, { include: MSG_INCLUDE });
+    res.status(201).json({ success: true, message: populated, whatsappSent });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

@@ -1,18 +1,20 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const MeetingSchema = new mongoose.Schema({
-  title:       { type: String, required: true },
-  scheduledAt: { type: Date, required: true },
-  duration:    { type: Number, default: 30 }, // minutes
-  meetingLink: { type: String },
-  platform:    { type: String, enum: ['zoom', 'google_meet', 'teams', 'other'], default: 'zoom' },
-  organizer:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  participants:{ type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], default: [] },
-  status:      { type: String, enum: ['scheduled', 'completed', 'cancelled'], default: 'scheduled' },
-  notes:       { type: String }
-}, { timestamps: true });
+const Meeting = sequelize.define('Meeting', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  _id: { type: DataTypes.VIRTUAL, get() { return this.id; } },
+  title: { type: DataTypes.STRING, allowNull: false },
+  scheduledAt: { type: DataTypes.DATE, allowNull: false },
+  duration: { type: DataTypes.INTEGER, defaultValue: 30 },
+  meetingLink: DataTypes.STRING,
+  platform: { type: DataTypes.ENUM('zoom', 'google_meet', 'teams', 'other'), defaultValue: 'zoom' },
+  organizerId: { type: DataTypes.UUID, allowNull: false },
+  status: { type: DataTypes.ENUM('scheduled', 'completed', 'cancelled'), defaultValue: 'scheduled' },
+  notes: DataTypes.TEXT
+}, {
+  tableName: 'meetings',
+  timestamps: true
+});
 
-MeetingSchema.index({ organizer: 1, scheduledAt: -1 });
-MeetingSchema.index({ participants: 1 });
-
-module.exports = mongoose.model('Meeting', MeetingSchema);
+module.exports = Meeting;

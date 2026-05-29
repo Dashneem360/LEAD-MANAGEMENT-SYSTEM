@@ -1,14 +1,17 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const GroupMessageSchema = new mongoose.Schema({
-  group: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', required: true },
-  from:  { type: mongoose.Schema.Types.ObjectId, ref: 'User',  required: true },
-  type:  { type: String, enum: ['text', 'voice'], default: 'text' },
-  content:  { type: String },
-  audioUrl: { type: String },
-  readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
-}, { timestamps: true });
+const GroupMessage = sequelize.define('GroupMessage', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  _id: { type: DataTypes.VIRTUAL, get() { return this.id; } },
+  groupId: { type: DataTypes.UUID, allowNull: false },
+  fromId: { type: DataTypes.UUID, allowNull: false },
+  type: { type: DataTypes.ENUM('text', 'voice'), defaultValue: 'text' },
+  content: DataTypes.TEXT,
+  audioUrl: DataTypes.STRING
+}, {
+  tableName: 'group_messages',
+  timestamps: true
+});
 
-GroupMessageSchema.index({ group: 1, createdAt: 1 });
-
-module.exports = mongoose.model('GroupMessage', GroupMessageSchema);
+module.exports = GroupMessage;

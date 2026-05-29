@@ -1,16 +1,19 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const MessageSchema = new mongoose.Schema({
-  from: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  to:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['text', 'voice'], default: 'text' },
-  content:  { type: String },
-  audioUrl: { type: String },
-  isRead:       { type: Boolean, default: false },
-  whatsappSent: { type: Boolean, default: false }
-}, { timestamps: true });
+const Message = sequelize.define('Message', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  _id: { type: DataTypes.VIRTUAL, get() { return this.id; } },
+  fromId: { type: DataTypes.UUID, allowNull: false },
+  toId: { type: DataTypes.UUID, allowNull: false },
+  type: { type: DataTypes.ENUM('text', 'voice'), defaultValue: 'text' },
+  content: DataTypes.TEXT,
+  audioUrl: DataTypes.STRING,
+  isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
+  whatsappSent: { type: DataTypes.BOOLEAN, defaultValue: false }
+}, {
+  tableName: 'messages',
+  timestamps: true
+});
 
-MessageSchema.index({ from: 1, to: 1, createdAt: -1 });
-MessageSchema.index({ to: 1, isRead: 1 });
-
-module.exports = mongoose.model('Message', MessageSchema);
+module.exports = Message;

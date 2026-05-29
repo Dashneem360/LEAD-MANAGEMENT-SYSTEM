@@ -1,22 +1,28 @@
 const express = require('express');
 const router = express.Router();
-const Meeting = require('../models/Meeting');
-const Message = require('../models/Message');
-const Notification = require('../models/Notification');
-const User = require('../models/User');
+const { Op } = require('sequelize');
+const { Meeting, Message, Notification, User, MeetingParticipant } = require('../models');
 const { protect } = require('../middleware/auth');
+
+const MEETING_INCLUDE = [
+  { model: User, as: 'organizer', attributes: ['id', 'name', 'avatar'] },
+  { model: User, as: 'participants', attributes: ['id', 'name', 'avatar'] }
+];
 
 router.use(protect);
 
 // GET /api/meetings
 router.get('/', async (req, res) => {
   try {
-    const meetings = await Meeting.find({
-      $or: [{ organizer: req.user._id }, { participants: req.user._id }]
-    })
-      .populate('organizer', 'name avatar')
-      .populate('participants', 'name avatar')
-      .sort({ scheduledAt: -1 });
+    const orgIds = await Meeting.findAll({ where: { organizerId: req.user.id }, attributes: ['id'], raw: true }).then(r => r.map(m => m.id));
+    const partIds = await MeetingParticipant.findAll({ where: { userId: req.user.id }, attributes: ['meetingId'], raw: true }).then(r => r.map(m => m.meetingId));
+    const allIds = [...new Set([...orgIds, ...partIds])];
+
+    const meetings = await Meeting.findAll({
+      where: { id: { [Op.in]: allIds.length ? allIds : ['00000000-0000-0000-0000-000000000000'] } },
+      include: MEETING_INCLUDE,
+      order: [['scheduledAt', 'DESC']]
+    });
     res.json({ success: true, meetings });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -27,19 +33,17 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const participantIds = Array.isArray(req.body.participants) ? req.body.participants : [];
-    const participants = await User.find({ _id: { $in: participantIds }, isActive: true }).select('_id');
-    const activeParticipantIds = participants.map((participant) => participant._id);
+    const activeUsers = await User.findAll({ where: { id: { [Op.in]: participantIds }, isActive: true }, attributes: ['id'] });
+    const activeIds = activeUsers.map(u => u.id);
 
-    const meeting = await Meeting.create({
-      ...req.body,
-      participants: activeParticipantIds,
-      organizer: req.user._id
-    });
+    const { participants, ...meetingData } = req.body;
+    const meeting = await Meeting.create({ ...meetingData, organizerId: req.user.id });
+    if (activeIds.length) {
+      await MeetingParticipant.bulkCreate(activeIds.map(uid => ({ meetingId: meeting.id, userId: uid })), { ignoreDuplicates: true });
+    }
 
     const scheduledAt = new Date(meeting.scheduledAt).toLocaleString('en-IN', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZone: 'Asia/Kolkata'
+      dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata'
     });
     const meetingText = [
       `Meeting scheduled: ${meeting.title}`,
@@ -49,23 +53,18 @@ router.post('/', async (req, res) => {
       meeting.notes ? `Notes: ${meeting.notes}` : ''
     ].filter(Boolean).join('\n');
 
-    await Promise.all(activeParticipantIds.map((participantId) => Promise.all([
+    await Promise.all(activeIds.map(uid => Promise.all([
       Notification.create({
-        user: participantId,
+        userId: uid,
         type: 'system',
         title: 'Meeting Scheduled',
         message: `${req.user.name} scheduled "${meeting.title}" for ${scheduledAt}`
       }),
-      Message.create({
-        from: req.user._id,
-        to: participantId,
-        type: 'text',
-        content: meetingText
-      })
+      Message.create({ fromId: req.user.id, toId: uid, type: 'text', content: meetingText })
     ])));
 
-    await meeting.populate('organizer participants', 'name avatar');
-    res.status(201).json({ success: true, meeting });
+    const populated = await Meeting.findByPk(meeting.id, { include: MEETING_INCLUDE });
+    res.status(201).json({ success: true, meeting: populated });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -74,12 +73,12 @@ router.post('/', async (req, res) => {
 // PUT /api/meetings/:id
 router.put('/:id', async (req, res) => {
   try {
-    const meeting = await Meeting.findOneAndUpdate(
-      { _id: req.params.id, organizer: req.user._id },
-      req.body, { new: true }
-    ).populate('organizer participants', 'name avatar');
+    const meeting = await Meeting.findOne({ where: { id: req.params.id, organizerId: req.user.id } });
     if (!meeting) return res.status(404).json({ success: false, message: 'Meeting not found' });
-    res.json({ success: true, meeting });
+    const { participants, ...updateData } = req.body;
+    await meeting.update(updateData);
+    const updated = await Meeting.findByPk(meeting.id, { include: MEETING_INCLUDE });
+    res.json({ success: true, meeting: updated });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -88,7 +87,8 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/meetings/:id
 router.delete('/:id', async (req, res) => {
   try {
-    await Meeting.findOneAndDelete({ _id: req.params.id, organizer: req.user._id });
+    await MeetingParticipant.destroy({ where: { meetingId: req.params.id } });
+    await Meeting.destroy({ where: { id: req.params.id, organizerId: req.user.id } });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

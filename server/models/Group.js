@@ -1,13 +1,16 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const GroupSchema = new mongoose.Schema({
-  name: { type: String, required: true, trim: true },
-  members: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  lastMessage: { type: String, default: '' },
-  lastMessageAt: { type: Date }
-}, { timestamps: true });
+const Group = sequelize.define('Group', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  _id: { type: DataTypes.VIRTUAL, get() { return this.id; } },
+  name: { type: DataTypes.STRING, allowNull: false },
+  createdById: { type: DataTypes.UUID, allowNull: false },
+  lastMessage: { type: DataTypes.STRING, defaultValue: '' },
+  lastMessageAt: DataTypes.DATE
+}, {
+  tableName: 'groups',
+  timestamps: true
+});
 
-GroupSchema.index({ members: 1 });
-
-module.exports = mongoose.model('Group', GroupSchema);
+module.exports = Group;

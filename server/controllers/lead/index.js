@@ -1,55 +1,72 @@
-const Lead = require('../../models/Lead');
-const User = require('../../models/User');
-const Followup = require('../../models/Followup');
-const Notification = require('../../models/Notification');
+const { Op } = require('sequelize');
+const { Lead, User, Followup, Notification, LeadRemark } = require('../../models');
+
+const LEAD_USER_ATTRS = ['id', 'name', 'email', 'avatar'];
+const LEAD_INCLUDE = [
+  { model: User, as: 'assignedTo', attributes: LEAD_USER_ATTRS },
+  { model: User, as: 'assignedBy', attributes: ['id', 'name'] },
+  {
+    model: LeadRemark, as: 'remarks',
+    include: [{ model: User, as: 'addedBy', attributes: ['id', 'name', 'avatar'] }],
+    order: [['addedAt', 'ASC']]
+  }
+];
+
+const incrementStat = async (userId, stat, amount = 1) => {
+  if (!userId) return;
+  const user = await User.findByPk(userId, { attributes: ['id', 'stats'] });
+  if (!user) return;
+  const stats = { ...(user.stats || {}) };
+  stats[stat] = (stats[stat] || 0) + amount;
+  await user.update({ stats });
+};
 
 // GET /api/leads
 exports.getLeads = async (req, res) => {
   try {
     const { status, assignedTo, search, source, priority, page = 1, limit = 20, webinarStatus, sortBy, followupFrom, followupTo } = req.query;
-    const query = { isActive: true };
+    const where = { isActive: true };
 
-    // Members see only their leads
-    if (req.user.role === 'member') query.assignedTo = req.user._id;
-    else if (assignedTo) query.assignedTo = assignedTo;
+    if (req.user.role === 'member') where.assignedToId = req.user.id;
+    else if (assignedTo) where.assignedToId = assignedTo;
 
-    if (status) query.status = status;
-    if (source) query.source = source;
-    if (priority) query.priority = priority;
-    if (webinarStatus) query.webinarStatus = webinarStatus;
+    if (status) where.status = status;
+    if (source) where.source = source;
+    if (priority) where.priority = priority;
+    if (webinarStatus) where.webinarStatus = webinarStatus;
     if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+      where[Op.or] = [
+        { name: { [Op.iLike]: `%${search}%` } },
+        { phone: { [Op.iLike]: `%${search}%` } },
+        { email: { [Op.iLike]: `%${search}%` } }
       ];
     }
     if (followupFrom || followupTo) {
-      query.nextFollowupDate = {};
-      if (followupFrom) query.nextFollowupDate.$gte = new Date(followupFrom);
-      if (followupTo) query.nextFollowupDate.$lte = new Date(followupTo + 'T23:59:59.999Z');
+      where.nextFollowupDate = {};
+      if (followupFrom) where.nextFollowupDate[Op.gte] = new Date(followupFrom);
+      if (followupTo) where.nextFollowupDate[Op.lte] = new Date(followupTo + 'T23:59:59.999Z');
     }
 
     const sortMap = {
-      'followup_asc':  { nextFollowupDate: 1 },
-      'followup_desc': { nextFollowupDate: -1 },
-      'created_desc':  { createdAt: -1 },
-      'created_asc':   { createdAt: 1 },
-      'name_asc':      { name: 1 },
-      'deal_desc':     { dealValue: -1 }
+      followup_asc:  [['nextFollowupDate', 'ASC']],
+      followup_desc: [['nextFollowupDate', 'DESC']],
+      created_desc:  [['createdAt', 'DESC']],
+      created_asc:   [['createdAt', 'ASC']],
+      name_asc:      [['name', 'ASC']],
+      deal_desc:     [['dealValue', 'DESC']]
     };
-    const sort = sortMap[sortBy] || { createdAt: -1 };
+    const order = sortMap[sortBy] || [['createdAt', 'DESC']];
 
-    const total = await Lead.countDocuments(query);
-    const leads = await Lead.find(query)
-      .populate('assignedTo', 'name email avatar')
-      .populate('assignedBy', 'name')
-      .populate('remarks.addedBy', 'name')
-      .sort(sort)
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+    const total = await Lead.count({ where });
+    const leads = await Lead.findAll({
+      where,
+      include: LEAD_INCLUDE,
+      order,
+      offset: (page - 1) * parseInt(limit),
+      limit: parseInt(limit)
+    });
 
-    res.json({ success: true, leads, total, page: parseInt(page), pages: Math.ceil(total / limit) });
+    res.json({ success: true, leads, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -58,10 +75,7 @@ exports.getLeads = async (req, res) => {
 // GET /api/leads/:id
 exports.getLead = async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id)
-      .populate('assignedTo', 'name email avatar phone')
-      .populate('assignedBy', 'name')
-      .populate('remarks.addedBy', 'name avatar');
+    const lead = await Lead.findByPk(req.params.id, { include: LEAD_INCLUDE });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
     res.json({ success: true, lead });
   } catch (err) {
@@ -72,17 +86,24 @@ exports.getLead = async (req, res) => {
 // POST /api/leads
 exports.createLead = async (req, res) => {
   try {
-    const lead = await Lead.create({ ...req.body, assignedBy: req.user._id, source: req.body.source || 'manual' });
-    if (lead.assignedTo) {
-      await User.findByIdAndUpdate(lead.assignedTo, { $inc: { 'stats.totalLeads': 1 } });
+    const lead = await Lead.create({
+      ...req.body,
+      assignedById: req.user.id,
+      source: req.body.source || 'manual'
+    });
+    if (lead.assignedToId) {
+      await incrementStat(lead.assignedToId, 'totalLeads');
       await Notification.create({
-        user: lead.assignedTo, type: 'lead_assigned',
+        userId: lead.assignedToId,
+        type: 'lead_assigned',
         title: 'New Lead Assigned',
         message: `Lead "${lead.name}" has been assigned to you`,
-        relatedLead: lead._id
+        relatedLeadId: lead.id
       });
     }
-    const populated = await Lead.findById(lead._id).populate('assignedTo', 'name email avatar');
+    const populated = await Lead.findByPk(lead.id, {
+      include: [{ model: User, as: 'assignedTo', attributes: LEAD_USER_ATTRS }]
+    });
     res.status(201).json({ success: true, lead: populated });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -92,20 +113,23 @@ exports.createLead = async (req, res) => {
 // PUT /api/leads/:id
 exports.updateLead = async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id);
+    const lead = await Lead.findByPk(req.params.id);
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    // Track if status changed to converted
     const wasConverted = lead.status !== 'converted' && req.body.status === 'converted';
 
-    Object.assign(lead, req.body);
-    await lead.save();
+    // Only update known model fields (exclude nested/virtual)
+    const { remarks, assignedTo, assignedBy, ...updateFields } = req.body;
+    if (req.body.assignedTo !== undefined) updateFields.assignedToId = req.body.assignedTo;
+    await lead.update(updateFields);
 
-    if (wasConverted && lead.assignedTo) {
-      await User.findByIdAndUpdate(lead.assignedTo, { $inc: { 'stats.convertedLeads': 1 } });
+    if (wasConverted && lead.assignedToId) {
+      await incrementStat(lead.assignedToId, 'convertedLeads');
     }
 
-    const updated = await Lead.findById(lead._id).populate('assignedTo', 'name email avatar');
+    const updated = await Lead.findByPk(lead.id, {
+      include: [{ model: User, as: 'assignedTo', attributes: LEAD_USER_ATTRS }]
+    });
     res.json({ success: true, lead: updated });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -115,7 +139,7 @@ exports.updateLead = async (req, res) => {
 // DELETE /api/leads/:id
 exports.deleteLead = async (req, res) => {
   try {
-    await Lead.findByIdAndUpdate(req.params.id, { isActive: false });
+    await Lead.update({ isActive: false }, { where: { id: req.params.id } });
     res.json({ success: true, message: 'Lead deleted' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -125,12 +149,11 @@ exports.deleteLead = async (req, res) => {
 // POST /api/leads/:id/remark
 exports.addRemark = async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id);
+    const lead = await Lead.findByPk(req.params.id);
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    lead.remarks.push({ text: req.body.text, addedBy: req.user._id });
-    lead.latestRemark = req.body.text;
-    await lead.save();
-    const updated = await Lead.findById(lead._id).populate('remarks.addedBy', 'name avatar');
+    await LeadRemark.create({ leadId: lead.id, text: req.body.text, addedById: req.user.id, addedAt: new Date() });
+    await lead.update({ latestRemark: req.body.text });
+    const updated = await Lead.findByPk(lead.id, { include: LEAD_INCLUDE });
     res.json({ success: true, lead: updated });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -141,16 +164,20 @@ exports.addRemark = async (req, res) => {
 exports.assignLead = async (req, res) => {
   try {
     const { assignedTo } = req.body;
-    const lead = await Lead.findByIdAndUpdate(req.params.id, {
-      assignedTo, assignedBy: req.user._id, assignedAt: new Date()
-    }, { new: true }).populate('assignedTo', 'name email avatar');
-
-    await User.findByIdAndUpdate(assignedTo, { $inc: { 'stats.totalLeads': 1 } });
+    await Lead.update(
+      { assignedToId: assignedTo, assignedById: req.user.id, assignedAt: new Date() },
+      { where: { id: req.params.id } }
+    );
+    const lead = await Lead.findByPk(req.params.id, {
+      include: [{ model: User, as: 'assignedTo', attributes: LEAD_USER_ATTRS }]
+    });
+    await incrementStat(assignedTo, 'totalLeads');
     await Notification.create({
-      user: assignedTo, type: 'lead_assigned',
+      userId: assignedTo,
+      type: 'lead_assigned',
       title: 'Lead Assigned',
       message: `Lead "${lead.name}" has been assigned to you`,
-      relatedLead: lead._id
+      relatedLeadId: lead.id
     });
     res.json({ success: true, lead });
   } catch (err) {
@@ -164,8 +191,10 @@ exports.updateWebinarStatus = async (req, res) => {
     const { webinarStatus } = req.body;
     const update = { webinarStatus };
     if (webinarStatus === 'attended') update.webinarSeenAt = new Date();
-    const lead = await Lead.findByIdAndUpdate(req.params.id, update, { new: true })
-      .populate('assignedTo', 'name email avatar');
+    await Lead.update(update, { where: { id: req.params.id } });
+    const lead = await Lead.findByPk(req.params.id, {
+      include: [{ model: User, as: 'assignedTo', attributes: LEAD_USER_ATTRS }]
+    });
     res.json({ success: true, lead });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -180,13 +209,14 @@ exports.bulkImport = async (req, res) => {
 
     for (const row of leads) {
       try {
-        const existing = await Lead.findOne({ phone: row.phone });
+        const existing = await Lead.findOne({ where: { phone: row.phone } });
         if (existing) {
-          Object.assign(existing, row, { lastSyncedAt: new Date(), source: 'google_sheet' });
-          await existing.save();
+          const { remarks, assignedTo, assignedBy, ...safeRow } = row;
+          await existing.update({ ...safeRow, lastSyncedAt: new Date(), source: 'google_sheet' });
           updated++;
         } else {
-          await Lead.create({ ...row, source: 'google_sheet', lastSyncedAt: new Date() });
+          const { remarks, assignedTo, assignedBy, ...safeRow } = row;
+          await Lead.create({ ...safeRow, source: 'google_sheet', lastSyncedAt: new Date() });
           created++;
         }
       } catch { errors++; }
@@ -205,15 +235,21 @@ exports.getTodayCallingList = async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    const query = {
+    const where = {
       isActive: true,
-      nextFollowupDate: { $gte: today, $lt: tomorrow }
+      nextFollowupDate: { [Op.gte]: today, [Op.lt]: tomorrow }
     };
-    if (req.user.role === 'member') query.assignedTo = req.user._id;
+    if (req.user.role === 'member') where.assignedToId = req.user.id;
 
-    const leads = await Lead.find(query)
-      .populate('assignedTo', 'name avatar')
-      .sort({ priority: -1, nextFollowupDate: 1 });
+    const { sequelize } = require('../../config/sequelize');
+    const leads = await Lead.findAll({
+      where,
+      include: [{ model: User, as: 'assignedTo', attributes: ['id', 'name', 'avatar'] }],
+      order: [
+        [require('sequelize').literal(`CASE "Lead"."priority" WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`), 'ASC'],
+        ['nextFollowupDate', 'ASC']
+      ]
+    });
 
     res.json({ success: true, leads });
   } catch (err) {

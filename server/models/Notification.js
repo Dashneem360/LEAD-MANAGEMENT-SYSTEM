@@ -1,20 +1,23 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const NotificationSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+const Notification = sequelize.define('Notification', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  _id: { type: DataTypes.VIRTUAL, get() { return this.id; } },
+  userId: { type: DataTypes.UUID, allowNull: false },
   type: {
-    type: String,
-    enum: ['missed_followup', 'upcoming_followup', 'lead_assigned', 'webinar_reminder', 'system'],
-    required: true
+    type: DataTypes.ENUM('missed_followup', 'upcoming_followup', 'lead_assigned', 'webinar_reminder', 'system'),
+    allowNull: false
   },
-  title: { type: String, required: true },
-  message: { type: String, required: true },
-  relatedLead: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead' },
-  relatedFollowup: { type: mongoose.Schema.Types.ObjectId, ref: 'Followup' },
-  isRead: { type: Boolean, default: false },
-  readAt: { type: Date }
-}, { timestamps: true });
+  title: { type: DataTypes.STRING, allowNull: false },
+  message: { type: DataTypes.TEXT, allowNull: false },
+  relatedLeadId: DataTypes.UUID,
+  relatedFollowupId: DataTypes.UUID,
+  isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
+  readAt: DataTypes.DATE
+}, {
+  tableName: 'notifications',
+  timestamps: true
+});
 
-NotificationSchema.index({ user: 1, isRead: 1 });
-
-module.exports = mongoose.model('Notification', NotificationSchema);
+module.exports = Notification;

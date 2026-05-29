@@ -1,13 +1,13 @@
+const dotenv = require('dotenv');
+dotenv.config(); // must run before any model/sequelize imports
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 const connectDB = require('./config/db.config');
 const { syncGoogleSheet } = require('./utils/googleSheets');
-
-dotenv.config();
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';

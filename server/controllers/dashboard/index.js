@@ -1,42 +1,36 @@
-const mongoose = require('mongoose');
-const Lead = require('../../models/Lead');
-const Followup = require('../../models/Followup');
-const User = require('../../models/User');
-const Notification = require('../../models/Notification');
-const Message = require('../../models/Message');
+const { Op } = require('sequelize');
 const moment = require('moment');
+const sequelize = require('../../config/sequelize');
+const { Lead, Followup, User, Notification, Message } = require('../../models');
 
 // GET /api/dashboard/stats
 exports.getStats = async (req, res) => {
   try {
     const isAdmin = req.user.role !== 'member';
-    const userFilter = isAdmin ? {} : { assignedTo: req.user._id };
+    const userFilter = isAdmin ? {} : { assignedToId: req.user.id };
 
     const today = moment().startOf('day').toDate();
     const tomorrow = moment().endOf('day').toDate();
     const monthStart = moment().startOf('month').toDate();
     const weekStart = moment().startOf('week').toDate();
+    const fFilter = isAdmin ? {} : { assignedToId: req.user.id };
 
     const [
       totalLeads, newLeads, interestedLeads, convertedLeads,
       todayFollowups, pendingFollowups, missedFollowups,
       monthLeads, weekLeads, notSeenWebinar, unreadMessages
     ] = await Promise.all([
-      Lead.countDocuments({ ...userFilter, isActive: true }),
-      Lead.countDocuments({ ...userFilter, isActive: true, status: 'new' }),
-      Lead.countDocuments({ ...userFilter, isActive: true, status: 'interested' }),
-      Lead.countDocuments({ ...userFilter, isActive: true, status: 'converted' }),
-      Followup.countDocuments({ ...(isAdmin ? {} : { assignedTo: req.user._id }), scheduledDate: { $gte: today, $lte: tomorrow } }),
-      Followup.countDocuments({ ...(isAdmin ? {} : { assignedTo: req.user._id }), status: 'pending', scheduledDate: { $gte: today, $lte: tomorrow } }),
-      Followup.countDocuments({ ...(isAdmin ? {} : { assignedTo: req.user._id }), status: 'missed' }),
-      Lead.countDocuments({ ...userFilter, isActive: true, createdAt: { $gte: monthStart } }),
-      Lead.countDocuments({ ...userFilter, isActive: true, createdAt: { $gte: weekStart } }),
-      Lead.countDocuments({
-        ...userFilter,
-        isActive: true,
-        webinarStatus: { $in: ['not_invited', 'missed', 'invited'] }
-      }),
-      Message.countDocuments({ to: req.user._id, isRead: false })
+      Lead.count({ where: { ...userFilter, isActive: true } }),
+      Lead.count({ where: { ...userFilter, isActive: true, status: 'new' } }),
+      Lead.count({ where: { ...userFilter, isActive: true, status: 'interested' } }),
+      Lead.count({ where: { ...userFilter, isActive: true, status: 'converted' } }),
+      Followup.count({ where: { ...fFilter, scheduledDate: { [Op.gte]: today, [Op.lte]: tomorrow } } }),
+      Followup.count({ where: { ...fFilter, status: 'pending', scheduledDate: { [Op.gte]: today, [Op.lte]: tomorrow } } }),
+      Followup.count({ where: { ...fFilter, status: 'missed' } }),
+      Lead.count({ where: { ...userFilter, isActive: true, createdAt: { [Op.gte]: monthStart } } }),
+      Lead.count({ where: { ...userFilter, isActive: true, createdAt: { [Op.gte]: weekStart } } }),
+      Lead.count({ where: { ...userFilter, isActive: true, webinarStatus: { [Op.in]: ['not_invited', 'missed', 'invited'] } } }),
+      Message.count({ where: { toId: req.user.id, isRead: false } })
     ]);
 
     res.json({
@@ -58,32 +52,47 @@ exports.getGrowthChart = async (req, res) => {
   try {
     const { period = 'month', userId } = req.query;
     const isAdmin = req.user.role !== 'member';
-    const targetUser = isAdmin && userId ? userId : req.user._id;
-    const filter = isAdmin && !userId ? {} : { assignedTo: targetUser };
+    const targetUserId = isAdmin && userId ? userId : req.user.id;
 
-    let dateFormat, groupBy, days;
-    if (period === 'week') { dateFormat = '%Y-%m-%d'; days = 7; }
-    else if (period === 'month') { dateFormat = '%Y-%m-%d'; days = 30; }
-    else { dateFormat = '%Y-%m'; days = 365; }
+    let fmt, days;
+    if (period === 'week') { fmt = 'YYYY-MM-DD'; days = 7; }
+    else if (period === 'month') { fmt = 'YYYY-MM-DD'; days = 30; }
+    else { fmt = 'YYYY-MM'; days = 365; }
 
     const startDate = moment().subtract(days, 'days').startOf('day').toDate();
+    const leadWhere = isAdmin && !userId
+      ? { isActive: true, createdAt: { [Op.gte]: startDate } }
+      : { isActive: true, assignedToId: targetUserId, createdAt: { [Op.gte]: startDate } };
+    const followupWhere = isAdmin && !userId
+      ? { status: 'completed', completedAt: { [Op.gte]: startDate } }
+      : { assignedToId: targetUserId, status: 'completed', completedAt: { [Op.gte]: startDate } };
+    const conversionWhere = { ...leadWhere, status: 'converted', updatedAt: { [Op.gte]: startDate } };
+    delete conversionWhere.createdAt;
+
+    const groupDate = (col) => sequelize.fn('TO_CHAR', sequelize.col(col), fmt);
 
     const [leadsData, followupsData, conversionsData] = await Promise.all([
-      Lead.aggregate([
-        { $match: { ...filter, isActive: true, createdAt: { $gte: startDate } } },
-        { $group: { _id: { $dateToString: { format: dateFormat, date: '$createdAt' } }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } }
-      ]),
-      Followup.aggregate([
-        { $match: { ...(isAdmin && !userId ? {} : { assignedTo: typeof targetUser === 'string' ? new mongoose.Types.ObjectId(targetUser) : targetUser }), status: 'completed', completedAt: { $gte: startDate } } },
-        { $group: { _id: { $dateToString: { format: dateFormat, date: '$completedAt' } }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } }
-      ]),
-      Lead.aggregate([
-        { $match: { ...filter, isActive: true, status: 'converted', updatedAt: { $gte: startDate } } },
-        { $group: { _id: { $dateToString: { format: dateFormat, date: '$updatedAt' } }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } }
-      ])
+      Lead.findAll({
+        where: leadWhere,
+        attributes: [[groupDate('Lead.createdAt'), '_id'], [sequelize.fn('COUNT', sequelize.col('Lead.id')), 'count']],
+        group: [groupDate('Lead.createdAt')],
+        order: [[groupDate('Lead.createdAt'), 'ASC']],
+        raw: true
+      }),
+      Followup.findAll({
+        where: followupWhere,
+        attributes: [[groupDate('Followup.completedAt'), '_id'], [sequelize.fn('COUNT', sequelize.col('Followup.id')), 'count']],
+        group: [groupDate('Followup.completedAt')],
+        order: [[groupDate('Followup.completedAt'), 'ASC']],
+        raw: true
+      }),
+      Lead.findAll({
+        where: conversionWhere,
+        attributes: [[groupDate('Lead.updatedAt'), '_id'], [sequelize.fn('COUNT', sequelize.col('Lead.id')), 'count']],
+        group: [groupDate('Lead.updatedAt')],
+        order: [[groupDate('Lead.updatedAt'), 'ASC']],
+        raw: true
+      })
     ]);
 
     res.json({ success: true, leadsData, followupsData, conversionsData });
@@ -98,30 +107,26 @@ exports.getTeamPerformance = async (req, res) => {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Admin access required' });
     }
-    const monthStart = moment().startOf('month').toDate();
-    const members = await User.find({ isActive: true, role: 'member' }).select('name email avatar stats role');
+    const members = await User.findAll({
+      where: { isActive: true, role: 'member' },
+      attributes: ['id', 'name', 'email', 'avatar', 'stats', 'role']
+    });
 
     const performance = await Promise.all(members.map(async (member) => {
+      const todayStart = moment().startOf('day').toDate();
+      const todayEnd = moment().endOf('day').toDate();
       const [totalLeads, converted, followupsToday, completedToday, missed] = await Promise.all([
-        Lead.countDocuments({ assignedTo: member._id, isActive: true }),
-        Lead.countDocuments({ assignedTo: member._id, status: 'converted' }),
-        Followup.countDocuments({
-          assignedTo: member._id,
-          scheduledDate: { $gte: moment().startOf('day').toDate(), $lte: moment().endOf('day').toDate() }
-        }),
-        Followup.countDocuments({
-          assignedTo: member._id,
-          status: 'completed',
-          completedAt: { $gte: moment().startOf('day').toDate() }
-        }),
-        Followup.countDocuments({ assignedTo: member._id, status: 'missed' })
+        Lead.count({ where: { assignedToId: member.id, isActive: true } }),
+        Lead.count({ where: { assignedToId: member.id, status: 'converted' } }),
+        Followup.count({ where: { assignedToId: member.id, scheduledDate: { [Op.gte]: todayStart, [Op.lte]: todayEnd } } }),
+        Followup.count({ where: { assignedToId: member.id, status: 'completed', completedAt: { [Op.gte]: todayStart } } }),
+        Followup.count({ where: { assignedToId: member.id, status: 'missed' } })
       ]);
-
       return {
-        _id: member._id, name: member.name, email: member.email,
+        _id: member.id, id: member.id, name: member.name, email: member.email,
         avatar: member.avatar, role: member.role,
         totalLeads, converted, followupsToday, completedToday, missed,
-        conversionRate: totalLeads > 0 ? ((converted / totalLeads) * 100).toFixed(1) : 0,
+        conversionRate: totalLeads > 0 ? ((converted / totalLeads) * 100).toFixed(1) : 0
       };
     }));
 
@@ -134,11 +139,13 @@ exports.getTeamPerformance = async (req, res) => {
 // GET /api/dashboard/notifications
 exports.getNotifications = async (req, res) => {
   try {
-    const notifications = await Notification.find({ user: req.user._id })
-      .populate('relatedLead', 'name phone')
-      .sort({ createdAt: -1 })
-      .limit(20);
-    const unreadCount = await Notification.countDocuments({ user: req.user._id, isRead: false });
+    const notifications = await Notification.findAll({
+      where: { userId: req.user.id },
+      include: [{ model: Lead, as: 'relatedLead', attributes: ['id', 'name', 'phone'] }],
+      order: [['createdAt', 'DESC']],
+      limit: 20
+    });
+    const unreadCount = await Notification.count({ where: { userId: req.user.id, isRead: false } });
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -148,7 +155,10 @@ exports.getNotifications = async (req, res) => {
 // PUT /api/dashboard/notifications/read
 exports.markNotificationsRead = async (req, res) => {
   try {
-    await Notification.updateMany({ user: req.user._id, isRead: false }, { isRead: true, readAt: new Date() });
+    await Notification.update(
+      { isRead: true, readAt: new Date() },
+      { where: { userId: req.user.id, isRead: false } }
+    );
     res.json({ success: true, message: 'All notifications marked as read' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -159,11 +169,14 @@ exports.markNotificationsRead = async (req, res) => {
 exports.getLeadStatusChart = async (req, res) => {
   try {
     const isAdmin = req.user.role !== 'member';
-    const filter = isAdmin ? { isActive: true } : { isActive: true, assignedTo: req.user._id };
-    const data = await Lead.aggregate([
-      { $match: filter },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
+    const where = isAdmin ? { isActive: true } : { isActive: true, assignedToId: req.user.id };
+    const rows = await Lead.findAll({
+      where,
+      attributes: ['status', [sequelize.fn('COUNT', sequelize.col('Lead.id')), 'count']],
+      group: ['status'],
+      raw: true
+    });
+    const data = rows.map(r => ({ _id: r.status, count: parseInt(r.count) }));
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
