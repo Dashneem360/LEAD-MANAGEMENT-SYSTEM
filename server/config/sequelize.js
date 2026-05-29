@@ -1,14 +1,28 @@
 const { Sequelize } = require('sequelize');
 
-const databaseUrl = process.env.DATABASE_URL ||
-  `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
+const ssl = { rejectUnauthorized: false };
 
-const sequelize = new Sequelize(databaseUrl, {
-  dialect: 'postgres',
-  dialectOptions: {
-    ssl: { rejectUnauthorized: false }
-  },
-  logging: false
-});
+let sequelize;
+
+if (process.env.DATABASE_URL) {
+  sequelize = new Sequelize(process.env.DATABASE_URL.trim(), {
+    dialect: 'postgres',
+    dialectOptions: { ssl },
+    logging: false
+  });
+} else {
+  sequelize = new Sequelize(
+    process.env.DB_NAME,
+    process.env.DB_USER,
+    process.env.DB_PASSWORD,
+    {
+      host: process.env.DB_HOST,
+      port: parseInt(process.env.DB_PORT) || 5432,
+      dialect: 'postgres',
+      dialectOptions: { ssl },
+      logging: false
+    }
+  );
+}
 
 module.exports = sequelize;
